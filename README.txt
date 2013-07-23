@@ -1,3 +1,10 @@
+Note about this branch
+======================
+
+In this branch the original palette was replaced with Tango color palette.
+
+---
+
 Welcome to the source distribution of TreeSheets!
 
 This contains all the files needed to build TreeSheets for various platforms.
