@@ -89,7 +89,8 @@ struct Document
 
     wxDateTime lastmodificationtime;
     
-    #define loopallcells(c)         CollectCells();         loopv(_i, itercells) for(Cell *c = itercells[_i]; c; c = NULL)
+    #define loopcellsin(par, c)     CollectCells(par);      loopv(_i, itercells) for(Cell *c = itercells[_i]; c; c = NULL)
+    #define loopallcells(c)         CollectCells(rootgrid); loopv(_i, itercells) for(Cell *c = itercells[_i]; c; c = NULL)
     #define loopallcellssel(c)      CollectCellsSel();      loopv(_i, itercells) for(Cell *c = itercells[_i]; c; c = NULL)
     #define loopallcellsselnorec(c) CollectCellsSel(false); loopv(_i, itercells) for(Cell *c = itercells[_i]; c; c = NULL)
 
@@ -838,7 +839,7 @@ struct Document
     const char *Key(wxDC &dc, wxChar uk, int k, bool alt, bool ctrl, bool shift, bool &unprocessed)
     {
         Cell *c = selected.GetCell();
-        
+
         if (uk == WXK_NONE || k < ' ')
         {
             switch(k)
@@ -853,11 +854,11 @@ struct Document
                     return Action(dc, A_CANCELEDIT);
                 
                 #ifdef __WXGTK__        // should not be needed... another wxwidgets incompatibility
-                case WXK_LEFT:  return Action(dc, A_LEFT);
-                case WXK_RIGHT: return Action(dc, A_RIGHT);
-                case WXK_UP:    return Action(dc, A_UP);
-                case WXK_DOWN:  return Action(dc, A_DOWN);  
-                case WXK_TAB:   return Action(dc, A_NEXT);
+                case WXK_LEFT:  return Action(dc, (shift) ? ((ctrl) ? A_SCLEFT : A_SLEFT) : ((ctrl) ? A_MLEFT : A_LEFT));
+                case WXK_RIGHT: return Action(dc, (shift) ? ((ctrl) ? A_SCRIGHT : A_SRIGHT) : ((ctrl) ? A_MRIGHT : A_RIGHT));
+                case WXK_UP:    return Action(dc, (shift) ? ((ctrl) ? A_SCUP : A_SUP) : ((ctrl) ? A_MUP : A_UP));
+                case WXK_DOWN:  return Action(dc, (shift) ? ((ctrl) ? A_SCDOWN : A_SDOWN) : ((ctrl) ? A_MDOWN : A_DOWN));  
+                case WXK_TAB:   return Action(dc, (shift) ? A_PREV : A_NEXT);
                 #endif
             }
         }
@@ -1235,7 +1236,27 @@ struct Document
             case A_TT:      return selected.g->SetStyle(this, selected, STYLE_FIXED);
             case A_UNDERL:  return selected.g->SetStyle(this, selected, STYLE_UNDERLINE);
             case A_STRIKET: return selected.g->SetStyle(this, selected, STYLE_STRIKETHRU);
-            
+
+            case A_MARKDATA: case A_MARKVARD: case A_MARKVARU: case A_MARKVIEWH: case A_MARKVIEWV: case A_MARKCODE: 
+            {
+                int newcelltype;
+                switch(k)
+                {
+                    case A_MARKDATA: newcelltype = CT_DATA; break;
+                    case A_MARKVARD:  newcelltype = CT_VARD; break;
+                    case A_MARKVARU:  newcelltype = CT_VARU; break;
+                    case A_MARKVIEWH: newcelltype = CT_VIEWH; break;
+                    case A_MARKVIEWV: newcelltype = CT_VIEWV; break;
+                    case A_MARKCODE: newcelltype = CT_CODE; break;
+                }
+                selected.g->cell->AddUndo(this);
+                loopallcellsselnorec(c) {
+                    c->celltype = (newcelltype == CT_CODE) ? sys->ev.InferCellType(c->text) : newcelltype;
+                    Refresh();
+                }
+                return NULL;
+            }
+
             case A_CANCELEDIT:
                 if(selected.TextEdit()) break;
                 if(selected.g->cell->parent) { selected = selected.g->cell->parent->grid->FindCell(selected.g->cell); ScrollOrZoom(dc); }
@@ -1381,6 +1402,29 @@ struct Document
                 Refresh();
                 return NULL;
 
+            case A_MINISIZE:
+            {
+                selected.g->cell->AddUndo(this);
+                CollectCellsSel(false);
+                Vector<Cell *> outer;
+                outer.append(itercells);
+                loopv(i, outer)
+                {
+                    Cell *o = outer[i];
+                    if(o->grid)
+                    {
+                        loopcellsin(o, c) if(_i)
+                        {
+                            c->text.relsize = g_deftextsize - g_mintextsize() - c->Depth();
+                        }
+                    }
+                }
+                outer.setsize_nd(0);
+                selected.g->cell->ResetChildren();
+                Refresh();
+                return NULL;
+            }
+
             case A_FOLD:
                 loopallcellsselnorec(c) if(c->grid)
                 {
@@ -1457,13 +1501,6 @@ struct Document
 
         switch(k)
         {
-            case A_MARKDATA:  c->AddUndo(this); c->celltype = CT_DATA;  Refresh(); return NULL;
-            case A_MARKVARD:  c->AddUndo(this); c->celltype = CT_VARD;  Refresh(); return NULL;
-            case A_MARKVARU:  c->AddUndo(this); c->celltype = CT_VARU;  Refresh(); return NULL;
-            case A_MARKVIEWH: c->AddUndo(this); c->celltype = CT_VIEWH; Refresh(); return NULL;
-            case A_MARKVIEWV: c->AddUndo(this); c->celltype = CT_VIEWV; Refresh(); return NULL;
-            case A_MARKCODE:  c->AddUndo(this); c->celltype = sys->ev.InferCellType(c->text); Refresh(); return NULL;
-
             case A_NEXT: selected.Next(this, dc, false); return NULL;
             case A_PREV: selected.Next(this, dc, true);  return NULL;
 
@@ -1560,7 +1597,7 @@ struct Document
         }
     }
 
-    char *SearchNext(wxDC &dc)
+    char const *SearchNext(wxDC &dc)
     {
         if(!sys->searchstring.Len()) return "no search string";
         bool lastsel = true;
@@ -1865,10 +1902,10 @@ struct Document
         return NULL;
     }
 
-    void CollectCells()
+    void CollectCells(Cell *c)
     {
         itercells.setsize_nd(0);
-        rootgrid->CollectCells(itercells);
+        c->CollectCells(itercells);
     }
 
     void CollectCellsSel(bool recurse = true)
@@ -1886,7 +1923,7 @@ struct Document
     {
         searchfilter = false;
         editfilter = min(max(editfilter, 1), 99);
-        CollectCells();
+        CollectCells(rootgrid);
         itercells.sort((void *)(int (__cdecl *)(const void *, const void *))_timesort);
         loopv(i, itercells) itercells[i]->text.filtered = i>itercells.size()*editfilter/100;
         rootgrid->ResetChildren();
